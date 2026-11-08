@@ -38,7 +38,7 @@
 
       <div class="flex items-center gap-3 text-sm">
         <span id="last-updated" class="text-slate-500">กำลังโหลดข้อมูล...</span>
-        <button id="refresh-btn" onclick="fetchData()" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg shadow-sm hover:bg-slate-100 transition active:scale-95 text-slate-700 font-medium text-xs sm:text-sm">
+        <button id="refresh-btn" onclick="fetchData()" class="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-lg shadow-sm hover:bg-slate-100 transition active:scale-95 text-slate-700 font-medium text-xs sm:text-sm cursor-pointer">
           <i data-lucide="refresh-cw" class="w-4 h-4" id="refresh-icon"></i>
           รีเฟรชตอนนี้
         </button>
@@ -70,9 +70,9 @@
       <div class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
         <div>
           <p class="text-sm font-medium text-slate-500">สถานะการเชื่อมต่อ</p>
-          <p id="sync-status" class="text-2xl font-bold text-emerald-600 mt-1">พร้อมใช้งาน</p>
+          <p id="sync-status" class="text-2xl font-bold text-amber-500 mt-1">กำลังเชื่อมต่อ...</p>
         </div>
-        <div class="p-3 bg-emerald-50 text-emerald-600 rounded-lg">
+        <div class="p-3 bg-amber-50 text-amber-600 rounded-lg" id="status-icon-wrap">
           <i data-lucide="activity" class="w-6 h-6"></i>
         </div>
       </div>
@@ -93,7 +93,7 @@
         />
       </div>
       <div class="text-xs text-slate-400 self-end sm:self-center">
-        แสดงข้อมูลล่าสุด: <span id="displayed-count">0</span> รายการ
+        แสดงข้อมูล: <span id="displayed-count">0</span> รายการ
       </div>
     </div>
 
@@ -117,48 +117,137 @@
   </div>
 
   <script>
-    // URL สำหรับดึงข้อมูลในรูปแบบ CSV
+    // ลิงก์ CSV จากชีตของคุณ
     const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQu_e0s7LE3r8JX8u4_oKSzqdhF5Zdf3z9G9pochFn8UetIpPAXtjYnlEocSwm7RJLh0YsbiJyJI4qL/pub?gid=484645316&single=true&output=csv";
-    const
-      async function fetchData() {
-  const refreshIcon = document.getElementById("refresh-icon");
-  if (refreshIcon) refreshIcon.classList.add("animate-spin");
+    const REFRESH_INTERVAL = 30000; // 30 วินาที
 
-  try {
-    // ใช้ CORS Proxy หรือดึงตรงโดยไม่แคช
-    const targetUrl = `${CSV_URL}&_t=${Date.now()}`;
-    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+    let rawData = [];
+    let headers = [];
 
-    let response = await fetch(targetUrl);
-    
-    // หากดึงตรงไม่ผ่าน ให้สลับไปใช้ Proxy สำรองทันที
-    if (!response.ok) {
-      response = await fetch(proxyUrl);
+    async function fetchData() {
+      const refreshIcon = document.getElementById("refresh-icon");
+      if (refreshIcon) refreshIcon.classList.add("animate-spin");
+
+      const targetUrl = `${CSV_URL}&_t=${Date.now()}`;
+      let csvText = "";
+
+      try {
+        // ลองดึงตรงๆ จาก Google Sheets
+        try {
+          const directRes = await fetch(targetUrl);
+          if (directRes.ok) {
+            csvText = await directRes.text();
+          }
+        } catch (e) {
+          console.warn("Direct fetch blocked by browser, trying proxy...");
+        }
+
+        // หากดึงตรงไม่ผ่าน ให้สลับไปใช้ CORS Proxy สำรอง
+        if (!csvText) {
+          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+          const proxyRes = await fetch(proxyUrl);
+          if (!proxyRes.ok) throw new Error("ไม่สามารถดาวน์โหลดข้อมูลได้");
+          csvText = await proxyRes.text();
+        }
+
+        Papa.parse(csvText, {
+          header: true,
+          skipEmptyLines: "greedy",
+          complete: function(results) {
+            if (!results.data || results.data.length === 0) {
+              throw new Error("ไม่มีข้อมูลในไฟล์");
+            }
+
+            headers = results.meta.fields || [];
+            rawData = results.data;
+
+            updateDashboardUI();
+
+            const statusEl = document.getElementById("sync-status");
+            statusEl.innerText = "เชื่อมต่อแล้ว";
+            statusEl.className = "text-2xl font-bold text-emerald-600 mt-1";
+          }
+        });
+      } catch (err) {
+        console.error("Fetch Error:", err);
+        const statusEl = document.getElementById("sync-status");
+        statusEl.innerText = "เชื่อมต่อล้มเหลว";
+        statusEl.className = "text-2xl font-bold text-rose-600 mt-1";
+      } finally {
+        if (refreshIcon) refreshIcon.classList.remove("animate-spin");
+        updateTimestamp();
+        lucide.createIcons();
+      }
     }
 
-    const csvText = await response.text();
+    function updateDashboardUI() {
+      document.getElementById("total-rows").innerText = rawData.length.toLocaleString();
+      document.getElementById("total-cols").innerText = headers.length.toLocaleString();
 
-    Papa.parse(csvText, {
-      header: true,
-      skipEmptyLines: 'greedy',
-      complete: function(results) {
-        if (!results.data || results.data.length === 0) {
-          throw new Error("ไม่มีข้อมูล");
-        }
-        headers = results.meta.fields || [];
-        rawData = results.data || [];
+      const thead = document.getElementById("table-head");
+      thead.innerHTML = "";
+      const trHead = document.createElement("tr");
 
-        updateDashboardUI();
-        document.getElementById("sync-status").innerText = "เชื่อมต่อแล้ว";
-        document.getElementById("sync-status").className = "text-2xl font-bold text-emerald-600 mt-1";
+      headers.forEach(h => {
+        const th = document.createElement("th");
+        th.className = "px-6 py-3.5 font-semibold text-slate-700 whitespace-nowrap bg-slate-100";
+        th.innerText = h || "(ว่าง)";
+        trHead.appendChild(th);
+      });
+      thead.appendChild(trHead);
+
+      renderTableRows(rawData);
+    }
+
+    function renderTableRows(data) {
+      const tbody = document.getElementById("table-body");
+      tbody.innerHTML = "";
+      document.getElementById("displayed-count").innerText = data.length.toLocaleString();
+
+      if (data.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="${Math.max(headers.length, 1)}" class="text-center py-8 text-slate-400">ไม่พบรายการข้อมูล</td></tr>`;
+        return;
       }
+
+      data.forEach(row => {
+        const tr = document.createElement("tr");
+        tr.className = "hover:bg-slate-50 transition-colors";
+
+        headers.forEach(h => {
+          const td = document.createElement("td");
+          td.className = "px-6 py-3 whitespace-nowrap text-slate-600 border-b border-slate-100";
+          td.innerText = row[h] !== undefined ? row[h] : "";
+          tr.appendChild(td);
+        });
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    function handleSearch() {
+      const query = document.getElementById("search-input").value.toLowerCase().trim();
+      if (!query) {
+        renderTableRows(rawData);
+        return;
+      }
+
+      const filtered = rawData.filter(row => {
+        return headers.some(h => String(row[h] || "").toLowerCase().includes(query));
+      });
+
+      renderTableRows(filtered);
+    }
+
+    function updateTimestamp() {
+      const now = new Date();
+      document.getElementById("last-updated").innerText = `อัปเดตล่าสุด: ${now.toLocaleTimeString("th-TH")}`;
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      lucide.createIcons();
+      fetchData();
+      setInterval(fetchData, REFRESH_INTERVAL);
     });
-  } catch (err) {
-    console.error("Fetch Error:", err);
-    document.getElementById("sync-status").innerText = "เชื่อมต่อล้มเหลว";
-    document.getElementById("sync-status").className = "text-2xl font-bold text-rose-600 mt-1";
-  } finally {
-    if (refreshIcon) refreshIcon.classList.remove("animate-spin");
-    updateTimestamp();
-  }
-}
+  </script>
+</body>
+</html>
