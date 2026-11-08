@@ -120,3 +120,45 @@
     // URL สำหรับดึงข้อมูลในรูปแบบ CSV
     const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQu_e0s7LE3r8JX8u4_oKSzqdhF5Zdf3z9G9pochFn8UetIpPAXtjYnlEocSwm7RJLh0YsbiJyJI4qL/pub?gid=484645316&single=true&output=csv";
     const
+      async function fetchData() {
+  const refreshIcon = document.getElementById("refresh-icon");
+  if (refreshIcon) refreshIcon.classList.add("animate-spin");
+
+  try {
+    // ใช้ CORS Proxy หรือดึงตรงโดยไม่แคช
+    const targetUrl = `${CSV_URL}&_t=${Date.now()}`;
+    const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(targetUrl)}`;
+
+    let response = await fetch(targetUrl);
+    
+    // หากดึงตรงไม่ผ่าน ให้สลับไปใช้ Proxy สำรองทันที
+    if (!response.ok) {
+      response = await fetch(proxyUrl);
+    }
+
+    const csvText = await response.text();
+
+    Papa.parse(csvText, {
+      header: true,
+      skipEmptyLines: 'greedy',
+      complete: function(results) {
+        if (!results.data || results.data.length === 0) {
+          throw new Error("ไม่มีข้อมูล");
+        }
+        headers = results.meta.fields || [];
+        rawData = results.data || [];
+
+        updateDashboardUI();
+        document.getElementById("sync-status").innerText = "เชื่อมต่อแล้ว";
+        document.getElementById("sync-status").className = "text-2xl font-bold text-emerald-600 mt-1";
+      }
+    });
+  } catch (err) {
+    console.error("Fetch Error:", err);
+    document.getElementById("sync-status").innerText = "เชื่อมต่อล้มเหลว";
+    document.getElementById("sync-status").className = "text-2xl font-bold text-rose-600 mt-1";
+  } finally {
+    if (refreshIcon) refreshIcon.classList.remove("animate-spin");
+    updateTimestamp();
+  }
+}
